@@ -198,11 +198,14 @@ def read_cpu_stats(container, dimensions, stats, t):
 
 def read_network_stats(container, dimensions, stats, t):
     """Process network utilization stats for a container."""
-    net_stats = stats['network']
+    net_stats = stats['networks']
     log.info('Reading network stats: {0}'.format(net_stats))
 
-    items = sorted(net_stats.items())
-    emit(container, dimensions, 'network.usage', [x[1] for x in items], t=t)
+    for interface, if_stats in net_stats.items():
+        items = sorted(if_stats.items())
+        interface_dims = dimensions.copy()
+        interface_dims['interface'] = interface
+        emit(container, interface_dims, 'network.usage', [x[1] for x in items], t=t)
 
 
 def read_memory_stats(container, dimensions, stats, t):
@@ -388,8 +391,8 @@ class DockerPlugin:
     DEFAULT_BASE_URL = 'unix://var/run/docker.sock'
     DEFAULT_DOCKER_TIMEOUT = 5
 
-    # The stats endpoint is only supported by API >= 1.17
-    MIN_DOCKER_API_VERSION = '1.17'
+    # The new docker package only supports 1.21+.
+    MIN_DOCKER_API_VERSION = '1.21'
     MIN_DOCKER_API_STRICT_VERSION = StrictVersion(MIN_DOCKER_API_VERSION)
 
     # TODO: add support for 'networks' from API >= 1.20 to get by-iface stats.
