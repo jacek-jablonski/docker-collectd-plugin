@@ -2,9 +2,24 @@
 
 This file documents important changes to the Docker plugin for collectd. 
 
+- [2017-09-06: Use New Docker Python Client](#2017-09-06)
 - [2017-03-31: Update Documentation For Filtering Blkio Metrics](#2017-03-31)
 - [2017-03-29: Improve Dimension Extraction Robustness](#2017-03-29)
 - [2016-08-03: Dimensionalize block I/O and CPU per-core metrics](#2016-08-03)
+
+#### <a name="2017-09-06">2017-09-06: Use New Docker Python Client</a>
+
+The old `docker-py` pip package has been deprecated, so we are switching to the
+new `docker` pip package.  This means that the oldest version of docker we can
+support is 1.21.
+
+The only change to metric output is that now all network datapoints have an
+`interface` dimension and there can potentially be multiple interfaces per
+container.
+
+If you are updating an existing collectd installation, you will need to
+manually uninstall docker-py by running `pip uninstall docker-py` and then
+reinstall the `requirements.txt` file from this repo.
 
 #### <a name="2017-03-31">2017-03-31: Update Documentation For Filtering Blkio Metrics</a>
 
