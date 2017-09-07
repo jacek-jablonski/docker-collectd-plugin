@@ -233,7 +233,7 @@ Labels are key/value pairs.  You may specify just a label key pattern to exclude
 
 ## Requirements
 
-* Docker 1.5+
-* `docker-py`
+* Docker 1.9+
+* `docker`
 * `jsonpath_rw`
 * `python-dateutil`
