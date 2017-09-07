@@ -58,6 +58,26 @@ LoadPlugin python
   </Module>
 </Plugin>
 ```
+### Optional configuration flags
+
+The boolean configuration options CpuQuotaPercent and CpuSharesPercent turn on metrics for CPU quota and CPU shares. Both options are set to False by default.
+
+```apache
+TypesDB "/usr/share/collectd/docker-collectd-plugin/dockerplugin.db"
+LoadPlugin python
+
+<Plugin python>
+  ModulePath "/usr/share/collectd/docker-collectd-plugin"
+  Import "dockerplugin"
+
+  <Module dockerplugin>
+    BaseURL "unix://var/run/docker.sock"
+    Timeout 3
+    CpuQuotaPercent true
+    CpuSharesPercent true
+  </Module>
+</Plugin>
+```
 
 ### Extracting additional dimensions
 
@@ -193,6 +213,32 @@ everything else from the plugin:
 
 For convenience, you'll find those configuration blocks in the example configuration file [`10-docker.conf`](https://github.com/signalfx/integrations/blob/master/collectd-docker/10-docker.conf).
 
+## How to send metrics about resource allocation
+
+If a filter has been configured, then additional resource allocation metrics can be gathered by adding the following snippet to the plugin's filter configuration.
+
+```apache
+<Rule "Cpu">
+  <Match "regex">
+    Type "^cpu$"
+  </Match>
+  Target "return"
+</Rule>
+<Rule "CpuThrottlingData">
+  <Match "regex">
+    Type "^cpu.throttling_data$"
+  </Match>
+  Target "return"
+</Rule>
+<Rule "MemoryStats">
+  <Match "regex">
+    Type "^memory.stats$"
+    TypeInstance "^swap"
+  </Match>
+  Target "return"
+</Rule>
+```
+
 ## How to filter by Names, Labels, and Image Names
 It is now possible to filter by container names, image names, and labels.
 Each filter supports python regular expression strings.
@@ -217,7 +263,7 @@ Labels are key/value pairs.  You may specify just a label key pattern to exclude
 <Module dockerplugin>
   ...
   ExcludeLabel ".hello." ".world." # This pattern exludes labels with the substrings "hello" and values with substring "world"
-  ExcludeLabel ".hello." ".*" # This pattern excludes labels with the substring "hello" and all values 
+  ExcludeLabel ".hello." ".*" # This pattern excludes labels with the substring "hello" and all values
 </Module>
 ```
 
@@ -227,7 +273,7 @@ Labels are key/value pairs.  You may specify just a label key pattern to exclude
   ...
   ExcludeImage ".*elasticsearch.*" # This pattern matches for the substring elasticsearch
   ExcludeImage "^(?=elasticsearch)(?=.*:latest)" # This pattern looks for the word elasticsearch at the beginning of the name and tag latest
-  ExcludeImage "^(?=.*search)(?=.*:latest)" # This pattern looks for the substring search in the name and tag latest 
+  ExcludeImage "^(?=.*search)(?=.*:latest)" # This pattern looks for the substring search in the name and tag latest
 </Module>
 ```
 
