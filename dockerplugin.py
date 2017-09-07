@@ -33,9 +33,11 @@ import sys
 import threading
 import time
 from calendar import timegm
+from datetime import datetime
 from distutils.version import StrictVersion
 
 COLLECTION_INTERVAL = 10
+DEFAULT_SHARES = 1024
 
 
 def _c(c):
@@ -185,15 +187,28 @@ def read_cpu_stats(container, dimensions, stats, t):
 
     # CPU Percentage based on calculateCPUPercent Docker method
     # https://github.com/docker/docker/blob/master/api/client/stats.go
+    cpu_percent = get_cpu_percent(stats)
+    emit(container, dimensions, 'cpu.percent', [cpu_percent], t=t)
+
+
+def get_cpu_percent(stats):
     cpu_percent = 0.0
+    cpu_usage = stats['cpu_stats']['cpu_usage']
     if 'precpu_stats' in stats:
         precpu_stats = stats['precpu_stats']
         precpu_usage = precpu_stats['cpu_usage']
+        percpu = cpu_usage['percpu_usage']
         cpu_delta = cpu_usage['total_usage'] - precpu_usage['total_usage']
-        system_delta = system_cpu_usage - precpu_stats['system_cpu_usage']
-        if system_delta > 0 and cpu_delta > 0:
-            cpu_percent = 100.0 * cpu_delta / system_delta * len(percpu)
-    emit(container, dimensions, "cpu.percent", [cpu_percent], t=t)
+        # Sometimes system_cpu_usage is not in cpu_stats (when there's load)
+        if 'system_cpu_usage' in stats['cpu_stats']:
+            system_cpu_usage = stats['cpu_stats']['system_cpu_usage']
+            if 'system_cpu_usage' in precpu_stats:
+                pre_system_cpu_usage = precpu_stats['system_cpu_usage']
+                system_delta = float(system_cpu_usage - pre_system_cpu_usage)
+                if system_delta > 0 and cpu_delta > 0:
+                    cpu_percent = cpu_delta / system_delta * len(percpu)
+                    cpu_percent *= 100
+    return cpu_percent
 
 
 def read_network_stats(container, dimensions, stats, t):
@@ -205,7 +220,11 @@ def read_network_stats(container, dimensions, stats, t):
         items = sorted(if_stats.items())
         interface_dims = dimensions.copy()
         interface_dims['interface'] = interface
-        emit(container, interface_dims, 'network.usage', [x[1] for x in items], t=t)
+        emit(container,
+             interface_dims,
+             'network.usage',
+             [x[1] for x in items],
+             t=t)
 
 
 def read_memory_stats(container, dimensions, stats, t):
@@ -227,6 +246,62 @@ def read_memory_stats(container, dimensions, stats, t):
     else:
         log.notice('No detailed memory stats available from container {0}.'
                    .format(_c(container)))
+
+
+def read_cpu_shares_stats(container,
+                          container_inspect, cstats,
+                          cpu_percent, sum_of_shares):
+    # Get cpu shares used by container
+    stats = cstats.stats
+    dimensions = cstats.dimensions
+    num_cpus_host = len(stats['cpu_stats']['cpu_usage']['percpu_usage'])
+    shares_used_percent = 0.0
+    cpu_shares = container_inspect['HostConfig']['CpuShares'] or \
+        DEFAULT_SHARES
+    fraction_of_shares = cpu_shares / float(sum_of_shares)
+    shares_used_percent = cpu_percent / num_cpus_host / fraction_of_shares
+    emit(container, dimensions,
+         'cpu.shares',
+         [shares_used_percent],
+         type_instance='used.percent',
+         t=stats['read'])
+
+
+def read_cpu_quota_stats(container, container_inspect, cstats):
+    stats = cstats.stats
+    dimensions = cstats.dimensions
+    host_config = container_inspect['HostConfig']
+    cpu_quota = host_config.get('CpuQuota', 0)
+
+    if not cpu_quota:
+        return
+
+    if 'preread' in stats and 'precpu_stats' in stats:
+        period = host_config.get('CpuPeriod', 0)
+        # Default period length is 100,000
+        cpu_period = 100000 if period == 0 else period
+        preread = datetime.strptime(
+                stats['preread'][:-4],
+                "%Y-%m-%dT%H:%M:%S.%f")
+        read = datetime.strptime(
+                stats['read'][:-4],
+                "%Y-%m-%dT%H:%M:%S.%f")
+        # Time delta in ms between two reads from stats endpoint
+        delta_between_reads = (read - preread).total_seconds() * 1000
+        cpu_total = stats['cpu_stats']['cpu_usage']['total_usage']
+        precpu_stats = stats['precpu_stats']
+        precpu_total = precpu_stats['cpu_usage']['total_usage']
+        cpu_delta = cpu_total - precpu_total
+        number_of_periods = delta_between_reads / cpu_period
+        total_quota = number_of_periods * cpu_quota
+        # cpu delta is in nano seconds, convert to milliseconds
+        quota_used_percent = 100 * cpu_delta / (total_quota * (10e5))
+        emit(container,
+             dimensions,
+             'cpu.quota',
+             [quota_used_percent],
+             type_instance='used.percent',
+             t=stats['read'])
 
 
 class DimensionsProvider:
@@ -408,6 +483,8 @@ class DockerPlugin:
         self.excluded_images = []
         self.excluded_names = []
         self.stats = {}
+        self.cpu_quota_bool = False
+        self.cpu_shares_bool = False
 
     def is_excluded_label(self, container):
         """
@@ -506,6 +583,10 @@ class DockerPlugin:
                     handle.verbose = str_to_bool(node.values[0])
                 elif node.key == 'Interval':
                     COLLECTION_INTERVAL = int(node.values[0])
+                elif node.key == 'CpuQuotaPercent':
+                    self.cpu_quota_bool = str_to_bool(node.values[0])
+                elif node.key == 'CpuSharesPercent':
+                    self.cpu_shares_bool = str_to_bool(node.values[0])
                 elif (node.key == 'ExcludeName' or
                       node.key == 'ExcludeImage' or
                       node.key == 'ExcludeLabel'):
@@ -624,10 +705,10 @@ class DockerPlugin:
                      .format(_c(self.stats[cid]._container)))
             del self.stats[cid]
 
+        containers_state = []
         for container in containers:
             try:
                 container['Name'] = self._container_name(container['Names'])
-
                 # Start a stats gathering thread if the container is new.
                 if container['Id'] not in self.stats:
                     if self.is_excluded(container):
@@ -642,14 +723,43 @@ class DockerPlugin:
                 if not read_at:
                     # No stats available yet; skipping container.
                     continue
-
                 # Process stats through each reader.
                 for method in self.METHODS:
                     method(container, cstats.dimensions, stats, read_at)
+
+                # If CPU shares or quota metrics are required
+                if self.cpu_shares_bool or self.cpu_quota_bool:
+                    # Get cgroup info container by inspecting the container
+                    container_inspect = self.client \
+                                                .inspect_container(container)
+                    containers_state.append({
+                                    'container': container,
+                                    'container_inspect': container_inspect})
+
             except Exception, e:
                 log.exception(('Unable to retrieve stats for container '
                                '{container}: {msg}')
                               .format(container=_c(container), msg=e))
+        if self.cpu_shares_bool:
+            sum_of_shares =  \
+            reduce(
+                lambda a, b: a + (
+                    b['container_inspect']['HostConfig']['CpuShares'] or 1024),
+                containers_state, 0)
+
+        for state in containers_state:
+            container = state['container']
+            inspect = state['container_inspect']
+            cstats = self.stats[container['Id']]
+            cpu_percent = get_cpu_percent(cstats.stats)
+            if self.cpu_quota_bool:
+                read_cpu_quota_stats(container, inspect, cstats)
+            if self.cpu_shares_bool:
+                read_cpu_shares_stats(container,
+                                      inspect,
+                                      cstats,
+                                      cpu_percent,
+                                      sum_of_shares)
 
     def stop_all(self):
         for stat_thread in self.stats.values():
