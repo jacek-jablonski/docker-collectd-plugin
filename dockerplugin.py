@@ -287,7 +287,7 @@ def read_cpu_quota_stats(container, container_inspect, cstats):
                 stats['read'][:-4],
                 "%Y-%m-%dT%H:%M:%S.%f")
         # Time delta in ms between two reads from stats endpoint
-        delta_between_reads = (read - preread).total_seconds() * 1000
+        delta_between_reads = total_milliseconds((read - preread))
         cpu_total = stats['cpu_stats']['cpu_usage']['total_usage']
         precpu_stats = stats['precpu_stats']
         precpu_total = precpu_stats['cpu_usage']['total_usage']
@@ -302,6 +302,13 @@ def read_cpu_quota_stats(container, container_inspect, cstats):
              [quota_used_percent],
              type_instance='used.percent',
              t=stats['read'])
+
+# total_seconds() method of datetime available only from python 2.7
+def total_milliseconds(td):
+    td_microseconds = td.microseconds + \
+                                ((td.seconds + td.days * 24 * 3600) * 10**6)
+    td_milliseconds = td_microseconds / float(10**3)
+    return td_milliseconds
 
 
 class DimensionsProvider:
