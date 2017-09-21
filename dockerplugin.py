@@ -303,6 +303,7 @@ def read_cpu_quota_stats(container, container_inspect, cstats):
              type_instance='used.percent',
              t=stats['read'])
 
+
 # total_seconds() method of datetime available only from python 2.7
 def total_milliseconds(td):
     td_microseconds = td.microseconds + \
@@ -403,7 +404,8 @@ class ContainerStats(threading.Thread):
         threading.Thread.__init__(self)
         self.daemon = True
         self.stop = False
-
+        # Indicates whether the container stats has 'networks' information
+        self.hasNetworks = True
         self._container = container
         self._client = client
         self._feed = None
@@ -725,34 +727,55 @@ class DockerPlugin:
                                        self.client)
 
                 cstats = self.stats[container['Id']]
-                stats = cstats.stats
+                stats = cstats.stats if cstats else None
                 read_at = stats.get('read') if stats else None
                 if not read_at:
                     # No stats available yet; skipping container.
                     continue
                 # Process stats through each reader.
                 for method in self.METHODS:
-                    method(container, cstats.dimensions, stats, read_at)
+                    try:
+                        method(container, cstats.dimensions, stats, read_at)
+                        # Reset hasNetworks if networks collects successfully
+                        if method == read_network_stats and \
+                           not cstats.hasNetworks:
+                            cstats.hasNetworks = True
+                    except Exception, e:
+                        if method != read_network_stats or cstats.hasNetworks:
+                            log.exception(('Unable to retrieve {method} stats '
+                                           'for container {container}: {msg}')
+                                          .format(
+                                                method=method.__name__,
+                                                container=_c(container),
+                                                msg=e
+                                         ))
+                        if method == read_network_stats and cstats.hasNetworks:
+                            cstats.hasNetworks = False
 
                 # If CPU shares or quota metrics are required
                 if self.cpu_shares_bool or self.cpu_quota_bool:
-                    # Get cgroup info container by inspecting the container
-                    container_inspect = self.client \
+                    try:
+                        # Get cgroup info container by inspecting the container
+                        container_inspect = self.client \
                                                 .inspect_container(container)
-                    containers_state.append({
+                        containers_state.append({
                                     'container': container,
                                     'container_inspect': container_inspect})
+                    except Exception, e:
+                        log.exception(('Unable to retrieve cpu share and quota'
+                                       ' stats for {container}: {msg}').format(
+                                           container=_c(container), msg=e))
 
             except Exception, e:
                 log.exception(('Unable to retrieve stats for container '
                                '{container}: {msg}')
                               .format(container=_c(container), msg=e))
         if self.cpu_shares_bool:
-            sum_of_shares =  \
-            reduce(
+            sum_of_shares = reduce(
                 lambda a, b: a + (
                     b['container_inspect']['HostConfig']['CpuShares'] or 1024),
-                containers_state, 0)
+                containers_state,
+                0)
 
         for state in containers_state:
             container = state['container']
