@@ -62,6 +62,11 @@ LoadPlugin python
 
 The boolean configuration options CpuQuotaPercent and CpuSharesPercent turn on metrics for CPU quota and CPU shares. Both options are set to False by default.
 
+The boolean option `CollectNetworkStats` controls whether container network
+stats are collected -- it defaults to true.  Some networking backends don't
+report network statistics (e.g. when running on Kubernetes) so it can be useful
+to disable to avoid error messages.
+
 ```apache
 TypesDB "/usr/share/collectd/docker-collectd-plugin/dockerplugin.db"
 LoadPlugin python

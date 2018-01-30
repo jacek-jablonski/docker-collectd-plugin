@@ -404,8 +404,6 @@ class ContainerStats(threading.Thread):
         threading.Thread.__init__(self)
         self.daemon = True
         self.stop = False
-        # Indicates whether the container stats has 'networks' information
-        self.hasNetworks = True
         self._container = container
         self._client = client
         self._feed = None
@@ -494,6 +492,7 @@ class DockerPlugin:
         self.stats = {}
         self.cpu_quota_bool = False
         self.cpu_shares_bool = False
+        self.collect_network_stats = True
 
     def is_excluded_label(self, container):
         """
@@ -596,6 +595,8 @@ class DockerPlugin:
                     self.cpu_quota_bool = str_to_bool(node.values[0])
                 elif node.key == 'CpuSharesPercent':
                     self.cpu_shares_bool = str_to_bool(node.values[0])
+                elif node.key == 'CollectNetworkStats':
+                    self.collect_network_stats = str_to_bool(node.values[0])
                 elif (node.key == 'ExcludeName' or
                       node.key == 'ExcludeImage' or
                       node.key == 'ExcludeLabel'):
@@ -734,23 +735,17 @@ class DockerPlugin:
                     continue
                 # Process stats through each reader.
                 for method in self.METHODS:
+                    if not self.collect_network_stats and method == read_network_stats:
+                        continue
                     try:
                         method(container, cstats.dimensions, stats, read_at)
-                        # Reset hasNetworks if networks collects successfully
-                        if method == read_network_stats and \
-                           not cstats.hasNetworks:
-                            cstats.hasNetworks = True
                     except Exception, e:
-                        if method != read_network_stats or cstats.hasNetworks:
-                            log.exception(('Unable to retrieve {method} stats '
-                                           'for container {container}: {msg}')
-                                          .format(
-                                                method=method.__name__,
-                                                container=_c(container),
-                                                msg=e
-                                         ))
-                        if method == read_network_stats and cstats.hasNetworks:
-                            cstats.hasNetworks = False
+                        log.exception(('Unable to retrieve {method} stats '
+                                       'for container {container}: {msg}')
+                                      .format(
+                                            method=method.__name__,
+                                            container=_c(container),
+                                            msg=e))
 
                 # If CPU shares or quota metrics are required
                 if self.cpu_shares_bool or self.cpu_quota_bool:
