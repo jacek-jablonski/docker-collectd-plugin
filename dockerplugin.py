@@ -21,10 +21,11 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
-# Requirements: docker-py
+# Requirements: docker
 
 import dateutil.parser
 import docker
+import json
 import jsonpath_rw
 import logging
 import os
@@ -427,8 +428,10 @@ class ContainerStats(threading.Thread):
         while not self.stop:
             try:
                 if not self._feed:
+                    # Defer decoding until stats are needed to save CPU
                     self._feed = self._client.stats(self._container,
-                                                    decode=True)
+                                                    stream=True,
+                                                    decode=False)
                 self._stats = self._feed.next()
 
                 # Reset failure count on successful read from the stats API.
@@ -460,7 +463,7 @@ class ContainerStats(threading.Thread):
         """Wait, if needed, for stats to be available and return the most
         recently read stats data, parsed as JSON, for the container."""
         if self._stats:
-            return self._stats
+            return json.loads(self._stats)
         return None
 
 
