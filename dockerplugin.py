@@ -236,9 +236,6 @@ def read_memory_stats(container, dimensions, stats, t):
     values = [mem_stats['limit'], mem_stats['max_usage'], mem_stats['usage']]
     emit(container, dimensions, 'memory.usage', values, t=t)
 
-    mem_percent = 100.0 * mem_stats['usage'] / mem_stats['limit']
-    emit(container, dimensions, 'memory.percent', [mem_percent], t=t)
-
     detailed = mem_stats.get('stats')
     if detailed:
         for key, value in detailed.items():
@@ -247,6 +244,14 @@ def read_memory_stats(container, dimensions, stats, t):
     else:
         log.notice('No detailed memory stats available from container {0}.'
                    .format(_c(container)))
+
+    if detailed and detailed.get('cache'):
+        # If we have detailed memory stats then the page cache should be deducted from the usage figure
+        mem_percent = 100.0 * (mem_stats['usage'] - detailed['cache']) / mem_stats['limit']
+    else:
+        mem_percent = 100.0 * mem_stats['usage'] / mem_stats['limit']
+
+    emit(container, dimensions, 'memory.percent', [mem_percent], t=t)
 
 
 def read_cpu_shares_stats(container,
