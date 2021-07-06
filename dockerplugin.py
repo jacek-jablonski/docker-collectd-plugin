@@ -138,8 +138,8 @@ def read_blkio_stats(container, dimensions, stats, t):
                                                minor=value['minor'])
 
             if k not in device_stats:
-                device_stats[k] = []
-            device_stats[k].append(value['value'])
+                device_stats[k] = {}
+            device_stats[k][value['op'].lower()] = value['value']
             device_major_stats[k] = value['major']
             device_minor_stats[k] = value['minor']
 
@@ -149,14 +149,11 @@ def read_blkio_stats(container, dimensions, stats, t):
             blkio_dims['device_major'] = str(device_major_stats[type_instance])
             blkio_dims['device_minor'] = str(device_minor_stats[type_instance])
 
-            if len(values) == 5:
-                emit(container, blkio_dims, 'blkio', values,
-                     type_instance=key, t=t)
-            elif len(values) == 1:
-                # For some reason, some fields contains only one value and
-                # the 'op' field is empty. Need to investigate this
-                emit(container, blkio_dims, 'blkio.single', values,
-                     type_instance=key, t=t)
+            if len(values) == 6:
+                for op, value in values.items():
+                    type_instance = '{key}_{op}'.format(key=key, op=op)
+                    emit(container, blkio_dims, 'blkio', [value],
+                        type_instance=type_instance, t=t)
             else:
                 log.warning(('Unexpected number of blkio stats for '
                              'container {0}!')
@@ -182,9 +179,10 @@ def read_cpu_stats(container, dimensions, stats, t):
          [x[1] for x in items], t=t)
 
     system_cpu_usage = cpu_stats['system_cpu_usage']
-    values = [cpu_usage['total_usage'], cpu_usage['usage_in_kernelmode'],
-              cpu_usage['usage_in_usermode'], system_cpu_usage]
-    emit(container, dimensions, 'cpu.usage', values, t=t)
+    for type_instance in ['total_usage', 'usage_in_kernelmode', 'usage_in_usermode']:
+        emit(container, dimensions, 'cpu.usage', [cpu_usage[type_instance]], type_instance=type_instance, t=t)
+
+    emit(container, dimensions, 'cpu.usage', [system_cpu_usage], type_instance='system_cpu_usage', t=t)
 
     # CPU Percentage based on calculateCPUPercent Docker method
     # https://github.com/docker/docker/blob/master/api/client/stats.go
@@ -233,8 +231,8 @@ def read_memory_stats(container, dimensions, stats, t):
     mem_stats = stats['memory_stats']
     log.info('Reading memory stats: {0}'.format(mem_stats))
 
-    values = [mem_stats['limit'], mem_stats['max_usage'], mem_stats['usage']]
-    emit(container, dimensions, 'memory.usage', values, t=t)
+    for type_instance in ['limit', 'max_usage', 'usage']:
+        emit(container, dimensions, 'memory.usage', [mem_stats[type_instance]], type_instance=type_instance, t=t)
 
     detailed = mem_stats.get('stats')
     if detailed:
